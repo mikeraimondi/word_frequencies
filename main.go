@@ -18,13 +18,12 @@ const (
 )
 
 type wordStat struct {
-	word        string
-	occurrences uint64
-	frequency   float64
+	word      string
+	frequency float64
 }
 
 func (w *wordStat) String() string {
-	return fmt.Sprint("{", w.word, " ", w.occurrences, " ", w.frequency, "}")
+	return fmt.Sprint("{", w.word, " ", w.frequency, "}")
 }
 
 type descFreq []*wordStat
@@ -88,10 +87,12 @@ func runIngest(args []string) (err error) {
 	}
 
 	var wordStats []*wordStat
+	var occurrences uint64
 	files, err := filepath.Glob(filepath.Join(wd, args[0], dataGlob))
 	if err != nil {
 		return err
 	}
+
 	for _, file := range files {
 		f, err := os.Open(file)
 		if err != nil {
@@ -111,11 +112,6 @@ func runIngest(args []string) (err error) {
 			}
 			if err != nil {
 				return err
-			}
-
-			// ignore short words
-			if len(record[0]) < 2 {
-				continue
 			}
 
 			// not sure how to handle entries with special characters
@@ -140,21 +136,16 @@ func runIngest(args []string) (err error) {
 			}
 			word := strings.ToLower(strings.Split(record[0], "_")[0])
 			if len(wordStats) > 0 {
-				w := wordStats[len(wordStats)-1]
-				if w.word == word {
-					w.occurrences += uint64(count)
+				if w := wordStats[len(wordStats)-1]; w.word == word {
+					occurrences += uint64(count)
 				} else {
-					w.frequency = float64(w.occurrences) / float64(totalWords)
-					wordStats = append(wordStats, &wordStat{
-						word:        word,
-						occurrences: uint64(count),
-					})
+					w.frequency = float64(occurrences) / float64(totalWords)
+					wordStats = append(wordStats, &wordStat{word: word})
+					occurrences = uint64(count)
 				}
 			} else {
-				wordStats = append(wordStats, &wordStat{
-					word:        word,
-					occurrences: uint64(count),
-				})
+				occurrences = uint64(count)
+				wordStats = append(wordStats, &wordStat{word: word})
 			}
 		}
 	}
