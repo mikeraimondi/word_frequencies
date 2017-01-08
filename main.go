@@ -13,6 +13,7 @@ import (
 
 const (
 	minYear        = 1960
+	minOccurrences = 1000
 	totalsFilename = "googlebooks-eng-us-all-totalcounts-20120701.txt"
 	dataGlob       = "googlebooks-eng-us-all-1gram-*"
 )
@@ -87,7 +88,6 @@ func runIngest(args []string) (err error) {
 	}
 
 	var wordStats []*wordStat
-	var occurrences uint64
 	files, err := filepath.Glob(filepath.Join(wd, args[0], dataGlob))
 	if err != nil {
 		return err
@@ -105,6 +105,7 @@ func runIngest(args []string) (err error) {
 		r.FieldsPerRecord = 4
 		r.LazyQuotes = true
 
+		wordMap := make(map[string]uint64)
 		for {
 			record, err := r.Read()
 			if err == io.EOF {
@@ -114,19 +115,17 @@ func runIngest(args []string) (err error) {
 				return err
 			}
 
-			// not sure how to handle entries with special characters
+			// not sure how to handle entries with periods
 			// drop them for now
-			if strings.ContainsAny(record[0], "._") {
+			if strings.Contains(record[0], ".") {
 				continue
 			}
 
-			// ignore older usages
-			// contemporary English only
 			year, err := strconv.ParseInt(record[1], 10, 16)
 			if err != nil {
 				return err
 			}
-			if year < minYear {
+			if year < minYear { // ignore older usages
 				continue
 			}
 
@@ -135,17 +134,14 @@ func runIngest(args []string) (err error) {
 				return err
 			}
 			word := strings.ToLower(strings.Split(record[0], "_")[0])
-			if len(wordStats) > 0 {
-				if w := wordStats[len(wordStats)-1]; w.word == word {
-					occurrences += uint64(count)
-				} else {
-					w.frequency = float64(occurrences) / float64(totalWords)
-					wordStats = append(wordStats, &wordStat{word: word})
-					occurrences = uint64(count)
-				}
-			} else {
-				occurrences = uint64(count)
-				wordStats = append(wordStats, &wordStat{word: word})
+			wordMap[word] += uint64(count)
+		}
+		for word, occurrences := range wordMap {
+			if occurrences > minOccurrences { // don't care about unusual words
+				wordStats = append(wordStats, &wordStat{
+					word:      word,
+					frequency: float64(occurrences) / float64(totalWords),
+				})
 			}
 		}
 	}
