@@ -9,13 +9,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"compress/gzip"
 )
 
 const (
 	minYear        = 1960
 	minOccurrences = 1000
 	totalsFilename = "googlebooks-eng-us-all-totalcounts-20120701.txt"
-	dataGlob       = "googlebooks-eng-us-all-1gram-*"
+	dataGlob       = "googlebooks-eng-us-all-1gram-*.gz"
 )
 
 type wordStat struct {
@@ -100,7 +101,13 @@ func runIngest(args []string) (err error) {
 		}
 		defer f.Close()
 
-		r := csv.NewReader(f)
+		z, err := gzip.NewReader(f)
+		if err != nil {
+			return err
+		}
+		defer z.Close()
+
+		r := csv.NewReader(z)
 		r.Comma = '\t'
 		r.FieldsPerRecord = 4
 		r.LazyQuotes = true
@@ -133,7 +140,7 @@ func runIngest(args []string) (err error) {
 			if err != nil {
 				return err
 			}
-			word := strings.ToLower(strings.Split(record[0], "_")[0])
+			word := strings.ToLower(strings.Split(record[0], "_")[0]) // underscores separate 1gram from special character
 			wordMap[word] += uint64(count)
 		}
 		for word, occurrences := range wordMap {
