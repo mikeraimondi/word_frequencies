@@ -2,12 +2,12 @@ package main
 
 import (
 	"compress/gzip"
+	"container/heap"
 	"encoding/csv"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -22,6 +22,7 @@ const (
 type wordStat struct {
 	word      string
 	frequency float64
+	index     int
 }
 
 func (w *wordStat) String() string {
@@ -30,9 +31,27 @@ func (w *wordStat) String() string {
 
 type descFreq []*wordStat
 
-func (o descFreq) Len() int           { return len(o) }
-func (o descFreq) Swap(i, j int)      { o[i], o[j] = o[j], o[i] }
+func (o descFreq) Len() int { return len(o) }
+func (o descFreq) Swap(i, j int) {
+	o[i], o[j] = o[j], o[i]
+	o[i].index = i
+	o[j].index = j
+}
 func (o descFreq) Less(i, j int) bool { return o[i].frequency > o[j].frequency }
+func (o *descFreq) Push(x interface{}) {
+	n := len(*o)
+	word := x.(*wordStat)
+	word.index = n
+	*o = append(*o, word)
+}
+func (o *descFreq) Pop() interface{} {
+	old := *o
+	n := len(old)
+	word := old[n-1]
+	word.index = -1
+	*o = old[0 : n-1]
+	return word
+}
 
 func main() {
 	err := runIngest(os.Args[1:])
@@ -88,7 +107,6 @@ func runIngest(args []string) (err error) {
 		totalWords += uint64(yearTotal)
 	}
 
-	var wordStats []*wordStat
 	fileNames, err := filepath.Glob(filepath.Join(wd, args[0], dataGlob))
 	if err != nil {
 		return err
@@ -166,12 +184,16 @@ func runIngest(args []string) (err error) {
 			dChan <- true
 		}(fileName, words, done, errs)
 	}
+
+	var wordStats descFreq
+	heap.Init(&wordStats)
 OuterLoop:
 	for {
 		select {
 		case word := <-words:
-			wordStats = append(wordStats, word)
+			heap.Push(&wordStats, word)
 		case err := <-errs:
+			// TODO cancel all goroutines
 			return err
 		case <-done:
 			routines--
@@ -181,7 +203,9 @@ OuterLoop:
 		}
 	}
 
-	sort.Sort(descFreq(wordStats))
-	fmt.Println(wordStats[:100])
+	for i := 0; i < 100; i++ {
+		w := heap.Pop(&wordStats)
+		fmt.Print(w, " ")
+	}
 	return err
 }
