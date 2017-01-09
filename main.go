@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -9,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"compress/gzip"
 )
 
 const (
@@ -89,69 +89,98 @@ func runIngest(args []string) (err error) {
 	}
 
 	var wordStats []*wordStat
-	files, err := filepath.Glob(filepath.Join(wd, args[0], dataGlob))
+	fileNames, err := filepath.Glob(filepath.Join(wd, args[0], dataGlob))
 	if err != nil {
 		return err
 	}
 
-	for _, file := range files {
-		f, err := os.Open(file)
-		if err != nil {
+	errs := make(chan error)
+	words := make(chan *wordStat)
+	done := make(chan bool)
+	routines := 0
+
+	for _, fileName := range fileNames {
+		routines++
+		go func(fName string, wChan chan *wordStat, dChan chan bool, eChan chan error) {
+			f, err := os.Open(fName)
+			if err != nil {
+				eChan <- err
+				return
+			}
+			defer f.Close()
+
+			z, err := gzip.NewReader(f)
+			if err != nil {
+				eChan <- err
+				return
+			}
+			defer z.Close()
+
+			r := csv.NewReader(z)
+			r.Comma = '\t'
+			r.FieldsPerRecord = 4
+			r.LazyQuotes = true
+
+			wordMap := make(map[string]uint64)
+			for {
+				record, err := r.Read()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					eChan <- err
+					return
+				}
+
+				// not sure how to handle entries with periods
+				// drop them for now
+				if strings.Contains(record[0], ".") {
+					continue
+				}
+
+				year, err := strconv.ParseInt(record[1], 10, 16)
+				if err != nil {
+					eChan <- err
+					return
+				}
+				if year < minYear { // ignore older usages
+					continue
+				}
+
+				count, err := strconv.ParseInt(record[2], 10, 64)
+				if err != nil {
+					eChan <- err
+					return
+				}
+				word := strings.ToLower(strings.Split(record[0], "_")[0]) // underscores separate 1gram from special character
+				wordMap[word] += uint64(count)
+			}
+			for word, occurrences := range wordMap {
+				if occurrences > minOccurrences { // don't care about unusual words
+					wChan <- &wordStat{
+						word:      word,
+						frequency: float64(occurrences) / float64(totalWords),
+					}
+				}
+			}
+			dChan <- true
+		}(fileName, words, done, errs)
+	}
+OuterLoop:
+	for {
+		select {
+		case word := <-words:
+			wordStats = append(wordStats, word)
+		case err := <-errs:
 			return err
-		}
-		defer f.Close()
-
-		z, err := gzip.NewReader(f)
-		if err != nil {
-			return err
-		}
-		defer z.Close()
-
-		r := csv.NewReader(z)
-		r.Comma = '\t'
-		r.FieldsPerRecord = 4
-		r.LazyQuotes = true
-
-		wordMap := make(map[string]uint64)
-		for {
-			record, err := r.Read()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return err
-			}
-
-			// not sure how to handle entries with periods
-			// drop them for now
-			if strings.Contains(record[0], ".") {
-				continue
-			}
-
-			year, err := strconv.ParseInt(record[1], 10, 16)
-			if err != nil {
-				return err
-			}
-			if year < minYear { // ignore older usages
-				continue
-			}
-
-			count, err := strconv.ParseInt(record[2], 10, 64)
-			if err != nil {
-				return err
-			}
-			word := strings.ToLower(strings.Split(record[0], "_")[0]) // underscores separate 1gram from special character
-			wordMap[word] += uint64(count)
-		}
-		for word, occurrences := range wordMap {
-			if occurrences > minOccurrences { // don't care about unusual words
-				wordStats = append(wordStats, &wordStat{
-					word:      word,
-					frequency: float64(occurrences) / float64(totalWords),
-				})
+		case <-done:
+			routines--
+			if routines == 0 {
+				break OuterLoop
 			}
 		}
 	}
+
 	sort.Sort(descFreq(wordStats))
 	fmt.Println(wordStats[:100])
 	return err
