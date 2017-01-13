@@ -24,8 +24,8 @@ type wordStat struct {
 	frequency float64
 }
 
-func (w *wordStat) String() string {
-	return fmt.Sprint("{", w.word, " ", w.frequency, "}")
+func (w *wordStat) csvOut() []string {
+  return []string{w.word, strconv.FormatFloat(w.frequency,'f',-1,64)}
 }
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 	defer out.Close()
 	w := csv.NewWriter(out)
 	for _, wordRecord := range words {
-		w.Write([]string{wordRecord.word, strconv.FormatFloat(wordRecord.frequency,'f',-1,64)})
+		w.Write(wordRecord.csvOut())
 	}
 }
 
