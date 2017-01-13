@@ -2,12 +2,12 @@ package main
 
 import (
 	"compress/gzip"
-	"container/heap"
 	"encoding/csv"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -15,77 +15,57 @@ import (
 const (
 	minYear        = 1960
 	minOccurrences = 1000
-	totalsFilename = "googlebooks-eng-us-all-totalcounts-20120701.txt"
+	totalsFilename = "googlebooks-eng-us-all-totalcounts-*.txt"
 	dataGlob       = "googlebooks-eng-us-all-1gram-*.gz"
 )
 
 type wordStat struct {
 	word      string
 	frequency float64
-	index     int
 }
 
 func (w *wordStat) String() string {
 	return fmt.Sprint("{", w.word, " ", w.frequency, "}")
 }
 
-type descFreq []*wordStat
-
-func (o descFreq) Len() int { return len(o) }
-func (o descFreq) Swap(i, j int) {
-	o[i], o[j] = o[j], o[i]
-	o[i].index = i
-	o[j].index = j
-}
-func (o descFreq) Less(i, j int) bool { return o[i].frequency > o[j].frequency }
-func (o *descFreq) Push(x interface{}) {
-	n := len(*o)
-	word := x.(*wordStat)
-	word.index = n
-	*o = append(*o, word)
-}
-func (o *descFreq) Pop() interface{} {
-	old := *o
-	n := len(old)
-	word := old[n-1]
-	word.index = -1
-	*o = old[0 : n-1]
-	return word
-}
-
 func main() {
-	err := runIngest(os.Args[1:])
+	words, err := runIngest(os.Args[1])
 	if err != nil {
 		fmt.Println(err)
+		os.Exit(1)
+	}
+	out, err := os.Create(os.Args[2])
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer out.Close()
+	w := csv.NewWriter(out)
+	for _, wordRecord := range words {
+		w.Write([]string{wordRecord.word, strconv.FormatFloat(wordRecord.frequency,'f',-1,64)})
 	}
 }
 
-func runIngest(args []string) (err error) {
-	if len(args) != 1 {
-		return fmt.Errorf("exactly one data directory is required\n")
-	}
-
+func runIngest(dir string) ([]*wordStat, error) {
 	wd, err := os.Getwd()
 	if err != nil {
-		// return errors.New("getting working directory " + err.Error())
-		return err
+		return nil, err
 	}
 	wd, err = filepath.EvalSymlinks(wd)
 	if err != nil {
-		return err
-		// return errors.New("evaluating symlinks " + err.Error())
+		return nil, err
 	}
 
-	totalsFile, err := os.Open(filepath.Join(wd, args[0], totalsFilename))
+	totalsFile, err := os.Open(filepath.Join(wd, dir, totalsFilename))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer totalsFile.Close()
 	tr := csv.NewReader(totalsFile)
 	tr.Comma = '\t'
 	totals, err := tr.Read()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var totalWords uint64
 	for _, total := range totals {
@@ -95,21 +75,22 @@ func runIngest(args []string) (err error) {
 		}
 		year, err := strconv.ParseInt(yearTotals[0], 10, 16)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if year < minYear {
+		if year < minYear { // ignore older usages
 			continue
 		}
+
 		yearTotal, err := strconv.ParseInt(yearTotals[1], 10, 64)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		totalWords += uint64(yearTotal)
 	}
 
-	fileNames, err := filepath.Glob(filepath.Join(wd, args[0], dataGlob))
+	fileNames, err := filepath.Glob(filepath.Join(wd, dir, dataGlob))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	errs := make(chan error)
@@ -185,16 +166,15 @@ func runIngest(args []string) (err error) {
 		}(fileName, words, done, errs)
 	}
 
-	var wordStats descFreq
-	heap.Init(&wordStats)
+	var wordStats []*wordStat
 OuterLoop:
 	for {
 		select {
 		case word := <-words:
-			heap.Push(&wordStats, word)
+			wordStats = append(wordStats, word)
 		case err := <-errs:
 			// TODO cancel all goroutines
-			return err
+			return nil, err
 		case <-done:
 			routines--
 			if routines == 0 {
@@ -203,9 +183,9 @@ OuterLoop:
 		}
 	}
 
-	for i := 0; i < 100; i++ {
-		w := heap.Pop(&wordStats)
-		fmt.Print(w, " ")
-	}
-	return err
+	sort.Slice(wordStats, func(i, j int) bool {
+		return wordStats[i].frequency > wordStats[j].frequency
+	})
+
+	return wordStats, err
 }
