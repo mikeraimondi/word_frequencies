@@ -15,7 +15,7 @@ import (
 const (
 	minYear        = 1960
 	minOccurrences = 1000
-	totalsFilename = "googlebooks-eng-us-all-totalcounts-*.txt"
+	totalsGlob     = "googlebooks-eng-us-all-totalcounts-*.txt"
 	dataGlob       = "googlebooks-eng-us-all-1gram-*.gz"
 )
 
@@ -25,11 +25,57 @@ type wordStat struct {
 }
 
 func (w *wordStat) csvOut() []string {
-  return []string{w.word, strconv.FormatFloat(w.frequency,'f',-1,64)}
+	return []string{w.word, strconv.FormatFloat(w.frequency, 'f', -1, 64)}
 }
 
 func main() {
-	words, err := runIngest(os.Args[1])
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	wd, err = filepath.EvalSymlinks(wd)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	totalsFiles, err := filepath.Glob(filepath.Join(wd, os.Args[1], totalsGlob))
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	if len(totalsFiles) != 1 {
+		fmt.Println("provide exactly one totals file")
+		os.Exit(1)
+	}
+	totalsFile, err := os.Open(totalsFiles[0])
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer totalsFile.Close()
+	total, err := parseTotal(totalsFile)
+
+	fileNames, err := filepath.Glob(filepath.Join(wd, os.Args[1], dataGlob))
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	var files []io.Reader
+	for _, fileName := range fileNames {
+
+		file, err := os.Open(fileName)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1) // TODO this doesn't honor defer
+		}
+		defer file.Close()
+		files = append(files, file)
+	}
+
+	words, err := runIngest(total, files...)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -46,26 +92,12 @@ func main() {
 	}
 }
 
-func runIngest(dir string) ([]*wordStat, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	wd, err = filepath.EvalSymlinks(wd)
-	if err != nil {
-		return nil, err
-	}
-
-	totalsFile, err := os.Open(filepath.Join(wd, dir, totalsFilename))
-	if err != nil {
-		return nil, err
-	}
-	defer totalsFile.Close()
-	tr := csv.NewReader(totalsFile)
+func parseTotal(src io.Reader) (uint64, error) {
+	tr := csv.NewReader(src)
 	tr.Comma = '\t'
 	totals, err := tr.Read()
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	var totalWords uint64
 	for _, total := range totals {
@@ -75,7 +107,7 @@ func runIngest(dir string) ([]*wordStat, error) {
 		}
 		year, err := strconv.ParseInt(yearTotals[0], 10, 16)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		if year < minYear { // ignore older usages
 			continue
@@ -83,32 +115,23 @@ func runIngest(dir string) ([]*wordStat, error) {
 
 		yearTotal, err := strconv.ParseInt(yearTotals[1], 10, 64)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		totalWords += uint64(yearTotal)
 	}
+	return totalWords, nil
+}
 
-	fileNames, err := filepath.Glob(filepath.Join(wd, dir, dataGlob))
-	if err != nil {
-		return nil, err
-	}
-
+func runIngest(totalWords uint64, srcs ...io.Reader) ([]*wordStat, error) {
 	errs := make(chan error)
 	words := make(chan *wordStat)
 	done := make(chan bool)
 	routines := 0
 
-	for _, fileName := range fileNames {
+	for _, src := range srcs {
 		routines++
-		go func(fName string, wChan chan *wordStat, dChan chan bool, eChan chan error) {
-			f, err := os.Open(fName)
-			if err != nil {
-				eChan <- err
-				return
-			}
-			defer f.Close()
-
-			z, err := gzip.NewReader(f)
+		go func(source io.Reader, wChan chan *wordStat, dChan chan bool, eChan chan error) {
+			z, err := gzip.NewReader(source)
 			if err != nil {
 				eChan <- err
 				return
@@ -163,7 +186,7 @@ func runIngest(dir string) ([]*wordStat, error) {
 				}
 			}
 			dChan <- true
-		}(fileName, words, done, errs)
+		}(src, words, done, errs)
 	}
 
 	var wordStats []*wordStat
@@ -187,5 +210,5 @@ OuterLoop:
 		return wordStats[i].frequency > wordStats[j].frequency
 	})
 
-	return wordStats, err
+	return wordStats, nil
 }
