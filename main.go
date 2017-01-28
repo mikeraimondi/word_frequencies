@@ -14,7 +14,7 @@ import (
 
 const (
 	minYear        = 1960
-	minOccurrences = 1000
+	minOccurrences = 10000
 	totalsGlob     = "googlebooks-eng-us-all-totalcounts-*.txt"
 	dataGlob       = "googlebooks-eng-us-all-1gram-*.gz"
 )
@@ -88,7 +88,15 @@ func main() {
 	defer out.Close()
 	w := csv.NewWriter(out)
 	for _, wordRecord := range words {
-		w.Write(wordRecord.csvOut())
+		if err := w.Write(wordRecord.csvOut()); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }
 
