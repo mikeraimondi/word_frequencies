@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"regexp"
 )
 
 const (
@@ -135,6 +136,7 @@ func runIngest(totalWords uint64, srcs ...io.Reader) ([]*wordStat, error) {
 	words := make(chan *wordStat)
 	done := make(chan bool)
 	routines := 0
+	wordRegex := regexp.MustCompile(`\W`)
 
 	for _, src := range srcs {
 		routines++
@@ -162,12 +164,6 @@ func runIngest(totalWords uint64, srcs ...io.Reader) ([]*wordStat, error) {
 					return
 				}
 
-				// not sure how to handle entries with periods
-				// drop them for now
-				if strings.Contains(record[0], ".") {
-					continue
-				}
-
 				year, err := strconv.ParseInt(record[1], 10, 16)
 				if err != nil {
 					eChan <- err
@@ -177,12 +173,19 @@ func runIngest(totalWords uint64, srcs ...io.Reader) ([]*wordStat, error) {
 					continue
 				}
 
+				word := strings.ToLower(strings.Split(record[0], "_")[0]) // underscores separate 1gram from special character
+
+				// not sure how to handle entries with non-word characters
+				// drop them for now
+				if wordRegex.MatchString(word) {
+					continue
+				}
+
 				count, err := strconv.ParseInt(record[2], 10, 64)
 				if err != nil {
 					eChan <- err
 					return
 				}
-				word := strings.ToLower(strings.Split(record[0], "_")[0]) // underscores separate 1gram from special character
 				wordMap[word] += uint64(count)
 			}
 			for word, occurrences := range wordMap {
