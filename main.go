@@ -7,10 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"regexp"
 )
 
 const (
@@ -30,38 +30,39 @@ func (w *wordStat) csvOut() []string {
 }
 
 func main() {
+	if err := run(os.Args[1], os.Args[2]); err != nil {
+		fmt.Println("error: ", err, "; exiting")
+		os.Exit(1)
+	}
+}
+
+func run(dataDir, outFile string) error {
 	wd, err := os.Getwd()
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 	wd, err = filepath.EvalSymlinks(wd)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 
-	totalsFiles, err := filepath.Glob(filepath.Join(wd, os.Args[1], totalsGlob))
+	totalsFiles, err := filepath.Glob(filepath.Join(wd, dataDir, totalsGlob))
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 	if len(totalsFiles) != 1 {
-		fmt.Println("provide exactly one totals file")
-		os.Exit(1)
+		return fmt.Errorf("provide exactly one totals file")
 	}
 	totalsFile, err := os.Open(totalsFiles[0])
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 	defer totalsFile.Close()
 	total, err := parseTotal(totalsFile)
 
-	fileNames, err := filepath.Glob(filepath.Join(wd, os.Args[1], dataGlob))
+	fileNames, err := filepath.Glob(filepath.Join(wd, dataDir, dataGlob))
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 
 	var files []io.Reader
@@ -69,8 +70,7 @@ func main() {
 
 		file, err := os.Open(fileName)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1) // TODO this doesn't honor defer
+			return err
 		}
 		defer file.Close()
 		files = append(files, file)
@@ -78,27 +78,24 @@ func main() {
 
 	words, err := runIngest(total, files...)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
-	out, err := os.Create(os.Args[2])
+	out, err := os.Create(outFile)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 	defer out.Close()
 	w := csv.NewWriter(out)
 	for _, wordRecord := range words {
 		if err := w.Write(wordRecord.csvOut()); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			return err
 		}
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
 
 func parseTotal(src io.Reader) (uint64, error) {
