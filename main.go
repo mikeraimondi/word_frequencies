@@ -18,6 +18,7 @@ const (
 	minOccurrences = 10000
 	totalsGlob     = "googlebooks-eng-us-all-totalcounts-*.txt"
 	dataGlob       = "googlebooks-eng-us-all-1gram-*.gz"
+	outFile        = "dist/eng-us-10000-1960.csv.gz"
 )
 
 type wordStat struct {
@@ -30,13 +31,13 @@ func (w *wordStat) csvOut() []string {
 }
 
 func main() {
-	if err := run(os.Args[1], os.Args[2]); err != nil {
+	if err := run(os.Args[1]); err != nil {
 		fmt.Println("error: ", err, "; exiting")
 		os.Exit(1)
 	}
 }
 
-func run(dataDir, outFile string) error {
+func run(dataDir string) error {
 	wd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -85,7 +86,9 @@ func run(dataDir, outFile string) error {
 		return err
 	}
 	defer out.Close()
-	w := csv.NewWriter(out)
+	zOut := gzip.NewWriter(out)
+	defer zOut.Close()
+	w := csv.NewWriter(zOut)
 	for _, wordRecord := range words {
 		if err := w.Write(wordRecord.csvOut()); err != nil {
 			return err
@@ -172,9 +175,11 @@ func runIngest(totalWords uint64, srcs ...io.Reader) ([]*wordStat, error) {
 
 				word := strings.ToLower(strings.Split(record[0], "_")[0]) // underscores separate 1gram from special character
 
-				// not sure how to handle entries with non-word characters
-				// drop them for now
-				if wordRegex.MatchString(word) {
+				if wordRegex.MatchString(word) { // ignore words with non-word characters TODO handle them
+					continue
+				}
+
+				if len([]rune(word)) < 2 { // ignore very short words
 					continue
 				}
 
@@ -186,7 +191,7 @@ func runIngest(totalWords uint64, srcs ...io.Reader) ([]*wordStat, error) {
 				wordMap[word] += uint64(count)
 			}
 			for word, occurrences := range wordMap {
-				if occurrences > minOccurrences { // don't care about unusual words
+				if occurrences > minOccurrences { // ignore unusual words
 					wChan <- &wordStat{
 						word:      word,
 						frequency: float64(occurrences) / float64(totalWords),
